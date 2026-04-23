@@ -1,0 +1,30 @@
+name: Update Vulnerability DB
+
+on:
+  schedule:
+    # Se ejecuta todos los días a medianoche automáticamente
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # Este botón nos permite forzar la ejecución manualmente cuando queramos
+
+jobs:
+  update-db:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v3
+
+      - name: Obtener DB desde Wordfence
+        env:
+          WF_TOKEN: ${{ secrets.WF_API_TOKEN }}
+        run: |
+          curl -H "User-Agent: Argus-WP-Bot/1.0" -H "Authorization: Bearer $WF_TOKEN" "https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production" -o vulndb.json
+
+      - name: Guardar y subir cambios a GitHub
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add vulndb.json
+          git commit -m "chore: actualizacion automatica de base de datos" || exit 0
+          git push
