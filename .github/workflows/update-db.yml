@@ -2,10 +2,12 @@ name: Update Vulnerability DB
 
 on:
   schedule:
-    # Se ejecuta todos los días a medianoche automáticamente
     - cron: '0 0 * * *'
   workflow_dispatch:
-    # Este botón nos permite forzar la ejecución manualmente cuando queramos
+
+# PEDIMOS PERMISO EXPLÍCITO PARA ESCRIBIR EN EL REPOSITORIO
+permissions:
+  contents: write
 
 jobs:
   update-db:
@@ -13,7 +15,7 @@ jobs:
 
     steps:
       - name: Descargar el repositorio
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # ACTUALIZADO A V4 PARA QUITAR EL WARNING
 
       - name: Obtener DB desde Wordfence
         env:
