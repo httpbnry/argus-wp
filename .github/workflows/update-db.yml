@@ -21,8 +21,16 @@ jobs:
         env:
           WF_TOKEN: ${{ secrets.WF_API_TOKEN }}
         run: |
-          curl -H "User-Agent: Argus-WP-Bot/1.0" -H "Authorization: Bearer $WF_TOKEN" "https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production" -o vulndb.json
-
+          HTTP_STATUS=$(curl -w "%{http_code}" -H "User-Agent: Argus-WP-Bot/1.0" -H "Authorization: Bearer $WF_TOKEN" -s -o temp_vulndb.json "https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production")
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "Descarga exitosa. Actualizando base de datos."
+            mv temp_vulndb.json vulndb.json
+          else
+            echo "Error de la API de Wordfence (HTTP $HTTP_STATUS). No se actualizará el archivo hoy."
+            cat temp_vulndb.json
+            exit 1
+          fi
       - name: Guardar y subir cambios a GitHub
         run: |
           git config --global user.name "github-actions[bot]"
