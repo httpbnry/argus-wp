@@ -8,11 +8,15 @@
 
 ## 🚀 Características Principales
 
-1. **Reconocimiento Pasivo**: Detecta si el sitio web está ejecutando WordPress sin interactuar agresivamente con el servidor.
+1. **Reconocimiento Pasivo y Detección WAF**: Detecta si el sitio web está ejecutando WordPress y analiza sus cabeceras para descubrir si está protegido por un Web Application Firewall (Cloudflare, Wordfence, Sucuri).
 2. **Enumeración de Entorno**: Extrae activamente los plugins instalados y el tema activo leyendo las etiquetas del código fuente, así como sus versiones.
-3. **Detección de Information Disclosure (API REST)**: Identifica si el endpoint `/wp-json/wp/v2/users` está expuesto, recolectando los nombres de usuario y *slugs* válidos.
-4. **Escáner de Vulnerabilidades (CI/CD Mirror)**: Realiza un cruce de datos instantáneo y local de los plugins detectados utilizando la base de datos de inteligencia de vulnerabilidades. Esto funciona sin necesidad de API Keys por parte del usuario final gracias a una infraestructura basada en *GitHub Actions* que actualiza la base de datos de manera transparente todos los días.
-5. **Módulo de Fuerza Bruta Intrusiva**: Permite (mediante bandera explicita) realizar ataques de fuerza bruta al panel `wp-login.php` contra todos los usuarios extraídos, utilizando un diccionario de contraseñas de las más comunes.
+3. **Escáner de Vulnerabilidades (CI/CD Mirror)**: Realiza un cruce de datos instantáneo y local de los plugins detectados utilizando la base de datos de inteligencia de vulnerabilidades descargada desde tu mirror de GitHub.
+4. **Exportación de Reportes**: Genera completos reportes automatizados de auditoría en formatos legibles (TXT) o estructurados (JSON).
+
+### 💣 Módulos de Ataque (Activos)
+*   **Fuzzing de Backups (`--fuzz`)**: Rastrea el servidor en busca de archivos críticos mal asegurados (como `.env`, `wp-config.php.bak`, `debug.log`) y comprueba si hay *Directory Listing* expuesto.
+*   **Escáner XML-RPC (`--xmlrpc`)**: Realiza inyecciones a la API XML-RPC de WordPress para descubrir si el vector de ataque por amplificación DDoS está disponible.
+*   **Fuerza Bruta Multihilo (`-b`)**: Extrae usuarios válidos a través del endpoint REST API (`/wp-json/wp/v2/users`) y lanza un potente ataque de diccionario automatizado usando *ThreadPoolExecutor* para probar credenciales concurrentemente a altísima velocidad.
 
 ---
 
@@ -28,7 +32,6 @@
    ```bash
    pip install -r requirements.txt
    ```
-   *(Dependencias principales: `requests`, `beautifulsoup4`, `colorama`)*
 
 3. Dale permisos de ejecución:
    ```bash
@@ -39,33 +42,21 @@
 
 ## 💻 Uso de la Herramienta
 
-Argus-WP corrige automáticamente los prefijos (intenta HTTPS y cae a HTTP si no está disponible), por lo que basta con pasarle el dominio.
-
-### 1. Escaneo Básico (Reconocimiento)
+### Escaneo Básico (Seguro / Pasivo)
 ```bash
 ./argus-wp.py ejemplo.com
 ```
 
-### 2. Escaneo con Actualización de Vulnerabilidades
-Para asegurarse de que tienes los últimos *exploits* listados:
+### Escaneo Completo y Exportación
 ```bash
-./argus-wp.py ejemplo.com --update-db
-```
-> Esto descargará o actualizará automáticamente el archivo `wordfence_vulndb.json` en tu carpeta `db/`.
-
-### 3. Escaneo Agresivo (Fuerza Bruta)
-⚠️ **Advertencia:** Uso exclusivo para entornos controlados o con autorización previa.
-```bash
-./argus-wp.py ejemplo.com -b
+./argus-wp.py ejemplo.com --update-db -o reporte_auditoria.txt -f txt
 ```
 
----
-
-## 🏗️ Arquitectura CI/CD
-
-El módulo de vulnerabilidades no requiere que el analista se registre en servicios de terceros (como WPScan). Argus-WP incluye un flujo de trabajo (`workflow.yml`) alojado en GitHub Actions que extrae diariamente la base de datos de **Wordfence Intelligence V3**, y la sirve como un *Mirror Público*. 
-
-Cuando ejecutas la bandera `--update-db`, Argus-WP descarga este *mirror* en milisegundos y cruza los CVEs localmente.
+### Escaneo con Todos los Módulos Activos (RUIDOSO)
+⚠️ **Advertencia:** Los módulos activos enviarán decenas de peticiones anómalas. Uso exclusivo para entornos con autorización.
+```bash
+./argus-wp.py ejemplo.com --xmlrpc --fuzz -b
+```
 
 ---
 *Desarrollado con ♥ para el Trabajo de Fin de Grado (ASIR).*

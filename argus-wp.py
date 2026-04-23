@@ -5,6 +5,10 @@ import requests
 import argparse
 import sys
 import re
+import concurrent.futures
+import argparse
+import sys
+import re
 from bs4 import BeautifulSoup
 from colorama import init, Fore, Style
 
@@ -25,6 +29,10 @@ def check_wordpress(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         html = response.text
+        
+        # WAF Detection (Pasivo)
+        waf = detect_waf(response.headers, response.cookies)
+        
         if '/wp-content/' in html or '/wp-includes/' in html: is_wp = True
         if 'name="generator" content="WordPress' in html: is_wp = True
         license_resp = requests.get(f"{url}/license.txt", headers=HEADERS, timeout=5)
@@ -32,13 +40,33 @@ def check_wordpress(url):
 
         if is_wp:
             print_success("¡Objetivo confirmado! El sitio utiliza WordPress.")
-            return True, html 
+            return True, html, waf
         else:
             print_error("No se han encontrado evidencias de WordPress.")
-            return False, None
+            return False, None, waf
     except Exception as e:
         print_error(f"Error de conexión: {e}")
         sys.exit(1)
+
+def detect_waf(headers, cookies):
+    waf_name = None
+    headers_str = str(headers).lower()
+    cookies_str = str(cookies).lower()
+    
+    if 'cloudflare' in headers_str or 'cf-ray' in headers_str:
+        waf_name = "Cloudflare"
+    elif 'sucuri' in headers_str or 'x-sucuri' in headers_str:
+        waf_name = "Sucuri"
+    elif 'wordfence' in headers_str or 'wordfence' in cookies_str:
+        waf_name = "Wordfence"
+    elif 'akamai' in headers_str:
+        waf_name = "Akamai"
+        
+    if waf_name:
+        print_warning(f"¡Atención! Se ha detectado un Firewall (WAF): {waf_name}")
+    else:
+        print_info("No se ha detectado ningún WAF en las cabeceras principales.")
+    return waf_name
 
 def enumerate_plugins_themes(html):
     print_info("Iniciando escaneo pasivo de plugins y temas...")
@@ -52,10 +80,13 @@ def enumerate_plugins_themes(html):
         if not src: continue
         
         # Buscar plugins y su versión si existe (?ver=X.X.X)
-        plugin_match = re.search(r'/wp-content/plugins/([^/]+)/.*?(?:\?ver=([a-zA-Z0-9\.-]+))?', src)
+        plugin_match = re.search(r'/wp-content/plugins/([^/]+)/', src)
         if plugin_match:
             plugin_name = plugin_match.group(1)
-            version = plugin_match.group(2) if plugin_match.group(2) else "Desconocida"
+            # Buscar explícitamente ?ver= al final de la URL
+            version_match = re.search(r'\?ver=([a-zA-Z0-9\.-]+)', src)
+            version = version_match.group(1) if version_match else "Desconocida"
+            
             if plugin_name not in plugins or plugins[plugin_name] == "Desconocida":
                 plugins[plugin_name] = version
 
@@ -179,8 +210,58 @@ def check_vulnerabilities_local(plugins):
         
     return found_vulns
 
+def check_xmlrpc(url):
+    print_info("Comprobando si xmlrpc.php está habilitado...")
+    xmlrpc_url = f"{url}/xmlrpc.php"
+    try:
+        response = requests.post(xmlrpc_url, data="<methodCall><methodName>system.listMethods</methodName></methodCall>", headers=HEADERS, timeout=10)
+        if response.status_code == 200 and 'methodResponse' in response.text:
+            print_error("¡ALERTA! xmlrpc.php está habilitado (Vulnerable a ataques de amplificación DDoS)")
+            return True
+        elif response.status_code == 405 or 'XML-RPC server accepts POST requests only' in response.text:
+            print_error("¡ALERTA! xmlrpc.php está presente y responde (Posible vulnerabilidad)")
+            return True
+        else:
+            print_success("xmlrpc.php parece estar desactivado o protegido.")
+            return False
+    except Exception as e:
+        print_error(f"Error al comprobar xmlrpc.php: {e}")
+        return False
+
+def fuzz_backups(url):
+    print_info("Iniciando Fuzzing en busca de archivos sensibles...")
+    sensitive_files = [
+        "wp-config.php.bak", "wp-config.php.save", "wp-config.php.old",
+        "wp-config.php~", ".env", "debug.log", "wp-content/debug.log"
+    ]
+    found_files = []
+    
+    # 1. Buscar archivos
+    for file in sensitive_files:
+        target = f"{url}/{file}"
+        try:
+            resp = requests.get(target, headers=HEADERS, timeout=5, allow_redirects=False)
+            if resp.status_code == 200 and '<html' not in resp.text.lower():
+                print_error(f"¡CRÍTICO! Archivo sensible expuesto: {target}")
+                found_files.append(target)
+        except:
+            pass
+            
+    # 2. Comprobar Directory Listing
+    try:
+        resp = requests.get(f"{url}/wp-content/uploads/", headers=HEADERS, timeout=5)
+        if "Index of /wp-content/uploads" in resp.text:
+            print_error("¡CRÍTICO! Directory Listing habilitado en /wp-content/uploads/")
+            found_files.append(f"{url}/wp-content/uploads/")
+    except:
+        pass
+        
+    if not found_files:
+        print_success("No se encontraron archivos sensibles expuestos.")
+    return found_files
+
 def brute_force_login(url, users):
-    print_info("Iniciando módulo de fuerza bruta contra wp-login.php...")
+    print_info("Iniciando módulo de FUERZA BRUTA MULTIHILO contra wp-login.php...")
     successful_logins = []
     
     if not users:
@@ -196,24 +277,31 @@ def brute_force_login(url, users):
         "letmein", "password123", "abc123", "qwertyuiop", "654321", "root"
     ]
     
-    for user in users:
-        username = user['slug']
-        print_info(f"Atacando al usuario: {username}")
-        
-        for pwd in passwords:
-            data = {'log': username, 'pwd': pwd, 'wp-submit': 'Log In'}
-            try:
-                # allow_redirects=False para interceptar la redirección tras un login exitoso
-                response = requests.post(login_url, data=data, headers=HEADERS, timeout=5, allow_redirects=False)
+    def try_login(username, pwd):
+        data = {'log': username, 'pwd': pwd, 'wp-submit': 'Log In'}
+        try:
+            response = requests.post(login_url, data=data, headers=HEADERS, timeout=5, allow_redirects=False)
+            if response.status_code in [301, 302] and 'wordpress_logged_in_' in str(response.cookies):
+                print_success(f"¡ÉXITO CRÍTICO! Credenciales encontradas -> Usuario: {username} | Contraseña: {pwd}")
+                return {'username': username, 'password': pwd}
+        except:
+            pass
+        return None
+
+    # Implementación de Concurrencia (Multithreading)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = []
+        for user in users:
+            username = user['slug']
+            print_info(f"Encolando ataque al usuario: {username}")
+            for pwd in passwords:
+                futures.append(executor.submit(try_login, username, pwd))
                 
-                # Chequeamos si WordPress devuelve un código de redirección (302) y la cookie de logeo exitoso
-                if response.status_code in [301, 302] and 'wordpress_logged_in_' in str(response.cookies):
-                    print_success(f"¡ÉXITO CRÍTICO! Credenciales encontradas -> Usuario: {username} | Contraseña: {pwd}")
-                    successful_logins.append({'username': username, 'password': pwd})
-                    break
-            except requests.exceptions.RequestException as e:
-                print_error(f"Error de red durante fuerza bruta: {e}")
-                break
+        # Recoger resultados según vayan terminando
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                successful_logins.append(result)
                 
     return successful_logins
 
@@ -226,6 +314,7 @@ def export_report(data, filename, fmt):
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write("=== Argus-WP Audit Report ===\n")
                 f.write(f"URL Objetivo: {data.get('url')}\n")
+                f.write(f"WAF Detectado: {data.get('waf', 'Ninguno')}\n")
                 f.write(f"Tema Activo: {data.get('theme', 'No detectado')}\n\n")
                 
                 f.write("--- Plugins Detectados ---\n")
@@ -240,6 +329,16 @@ def export_report(data, filename, fmt):
                     f.write(f"[{p}]\n")
                     for v in v_list:
                         f.write(f"  - {v['title']} | {v['cve']} | CVSS: {v['cvss']}\n")
+                        
+                f.write("\n--- XML-RPC ---\n")
+                f.write(f"Habilitado: {'Sí' if data.get('xmlrpc_enabled') else 'No/No escaneado'}\n")
+                
+                f.write("\n--- Archivos Sensibles (Fuzzing) ---\n")
+                fuzz = data.get('sensitive_files', [])
+                if not fuzz:
+                    f.write("Ninguno o módulo no ejecutado.\n")
+                for file in fuzz:
+                    f.write(f"- {file}\n")
                         
                 f.write("\n--- Usuarios Extraídos (API REST) ---\n")
                 users = data.get('users', [])
@@ -276,7 +375,9 @@ def check_url(url):
 def main():
     parser = argparse.ArgumentParser(description="Argus-WP - Herramienta de auditoría para WordPress (TFG ASIR)")
     parser.add_argument("url", help="URL objetivo (ej. aclass.es o https://ejemplo.com)")
-    parser.add_argument("-b", "--brute", action="store_true", help="Activar módulo de fuerza bruta para usuarios encontrados")
+    parser.add_argument("-b", "--brute", action="store_true", help="[ACTIVO] Activar módulo de fuerza bruta multihilo")
+    parser.add_argument("--xmlrpc", action="store_true", help="[ACTIVO] Comprobar si xmlrpc.php está expuesto")
+    parser.add_argument("--fuzz", action="store_true", help="[ACTIVO] Realizar Fuzzing en busca de archivos sensibles y backups")
     parser.add_argument("--update-db", action="store_true", help="Fuerza la descarga/actualización de la base de datos de Wordfence (vía GitHub Mirror)")
     parser.add_argument("-o", "--output", help="Guardar el reporte de la auditoría en un archivo")
     parser.add_argument("-f", "--format", choices=['json', 'txt'], default='json', help="Formato del reporte (json o txt)")
@@ -300,15 +401,19 @@ def main():
     # Inicializar el reporte
     report_data = {
         'url': target_url,
+        'waf': None,
         'plugins': {},
         'theme': None,
         'vulnerabilities': {},
         'users': [],
+        'xmlrpc_enabled': False,
+        'sensitive_files': [],
         'brute_force_success': []
     }
     
-    is_wp, html_content = check_wordpress(target_url)
+    is_wp, html_content, waf_detected = check_wordpress(target_url)
     if not is_wp: sys.exit(0)
+    report_data['waf'] = waf_detected
         
     plugins, theme = enumerate_plugins_themes(html_content)
     report_data['plugins'] = plugins
@@ -323,7 +428,13 @@ def main():
     users = enumerate_users(target_url)
     report_data['users'] = users
     
-    # Módulo de fuerza bruta opcional
+    # Módulos Activos Opcionales
+    if args.xmlrpc:
+        report_data['xmlrpc_enabled'] = check_xmlrpc(target_url)
+        
+    if args.fuzz:
+        report_data['sensitive_files'] = fuzz_backups(target_url)
+    
     if args.brute:
         creds = brute_force_login(target_url, users)
         report_data['brute_force_success'] = creds
