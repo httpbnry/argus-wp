@@ -40,7 +40,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           # Añadimos la extensión .gz porque el archivo ya está comprimido
-          git add vulndb.json.gz
+          git add db/vulndb.json.gz
           # Comprueba si hay cambios antes de hacer el commit
           if git diff --staged --quiet; then
             echo "No hay vulnerabilidades nuevas. Nada que actualizar."
