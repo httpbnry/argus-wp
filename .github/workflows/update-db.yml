@@ -17,29 +17,34 @@ jobs:
       - name: Descargar el repositorio
         uses: actions/checkout@v4 # ACTUALIZADO A V4 PARA QUITAR EL WARNING
 
-      - name: Obtener DB desde Wordfence
+      - name: Obtener DB desde Wordfence y Comprimir
         env:
           WF_TOKEN: ${{ secrets.WF_API_TOKEN }}
         run: |
           HTTP_STATUS=$(curl -w "%{http_code}" -H "User-Agent: Argus-WP-Bot/1.0" -H "Authorization: Bearer $WF_TOKEN" -s -o temp_vulndb.json "https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production")
           
           if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "Descarga exitosa. Actualizando base de datos."
+            echo "Descarga exitosa. Comprimiendo y actualizando base de datos."
             mv temp_vulndb.json vulndb.json
+            # Comprimimos el archivo para no superar el límite de 100MB de GitHub
+            # Esto generará automáticamente el archivo 'vulndb.json.gz'
+            gzip -f vulndb.json
           else
             echo "Error de la API de Wordfence (HTTP $HTTP_STATUS). No se actualizará el archivo hoy."
             cat temp_vulndb.json
             exit 1
           fi
+          
       - name: Guardar y subir cambios a GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add vulndb.json
+          # Añadimos la extensión .gz porque el archivo ya está comprimido
+          git add vulndb.json.gz
           # Comprueba si hay cambios antes de hacer el commit
           if git diff --staged --quiet; then
             echo "No hay vulnerabilidades nuevas. Nada que actualizar."
           else
-            git commit -m "chore: actualizacion automatica de base de datos"
+            git commit -m "chore: actualizacion automatica de base de datos comprimida"
             git push
           fi
