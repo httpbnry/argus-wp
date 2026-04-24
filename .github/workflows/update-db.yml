@@ -25,10 +25,11 @@ jobs:
           
           if [ "$HTTP_STATUS" -eq 200 ]; then
             echo "Descarga exitosa. Comprimiendo y actualizando base de datos."
-            mv temp_vulndb.json vulndb.json
+            mkdir -p db
+            mv temp_vulndb.json db/vulndb.json
             # Comprimimos el archivo para no superar el límite de 100MB de GitHub
-            # Esto generará automáticamente el archivo 'vulndb.json.gz'
-            gzip -f vulndb.json
+            # Esto generará automáticamente el archivo 'db/vulndb.json.gz'
+            gzip -f db/vulndb.json
           else
             echo "Error de la API de Wordfence (HTTP $HTTP_STATUS). No se actualizará el archivo hoy."
             cat temp_vulndb.json
