@@ -6,6 +6,8 @@ import argparse
 import sys
 import re
 import concurrent.futures
+import gzip
+import shutil
 import argparse
 import sys
 import re
@@ -142,38 +144,52 @@ def enumerate_users(url):
 
 def update_wordfence_db(force_update=False):
     db_dir = "db"
-    db_file = os.path.join(db_dir, "wordfence_vulndb.json")
-    url = "https://raw.githubusercontent.com/httpbnry/argus-wp/main/vulndb.json"
+    db_file = os.path.join(db_dir, "vulndb.json")
+    gz_file = os.path.join(db_dir, "vulndb.json.gz")
+    url = "https://raw.githubusercontent.com/httpbnry/argus-wp/main/db/vulndb.json.gz"
     
-    # Crear directorio si no existe
+    # Crear directorio local si no existe
     if not os.path.exists(db_dir):
         os.makedirs(db_dir)
     
+    # Lógica de actualización (evitar descargas innecesarias)
     if os.path.exists(db_file) and not force_update:
         print_info(f"Usando la base de datos local '{db_file}'.")
         return True
 
-    print_info("Descargando la base de datos de vulnerabilidades (Mirror Argus-WP)...")
+    print_info("Descargando la base de datos comprimida de vulnerabilidades (Mirror Argus-WP)...")
     try:
-        response = requests.get(url, timeout=30)
+        # Descargar el archivo GZIP (stream=True para archivos pesados)
+        response = requests.get(url, timeout=30, stream=True)
+        response.raise_for_status() # Verifica errores HTTP (ej. 404, 403)
         
-        # Validar si HTTP es exitoso
-        response.raise_for_status()
-        
-        with open(db_file, 'w', encoding='utf-8') as f:
-            json.dump(response.json(), f)
-        print_success(f"Base de datos actualizada exitosamente en '{db_file}'.")
+        # 1. Guardar el archivo GZIP temporalmente
+        with open(gz_file, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+                
+        print_info("Descomprimiendo la base de datos...")
+        # 2. Descomprimir usando gzip y shutil
+        with gzip.open(gz_file, 'rb') as f_in:
+            with open(db_file, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+                
+        # 3. Eliminar el archivo GZIP residual
+        if os.path.exists(gz_file):
+            os.remove(gz_file)
+            
+        print_success(f"Base de datos actualizada y extraída exitosamente en '{db_file}'.")
         return True
             
     except requests.exceptions.RequestException as e:
         print_error(f"Error de red al intentar descargar la base de datos: {e}")
         return False
-    except json.JSONDecodeError:
-        print_error("El archivo descargado no es un JSON válido.")
+    except Exception as e:
+        print_error(f"Error durante el proceso de extracción: {e}")
         return False
 
 def check_vulnerabilities_local(plugins):
-    db_file = os.path.join("db", "wordfence_vulndb.json")
+    db_file = os.path.join("db", "vulndb.json")
     found_vulns = {}
     
     if not os.path.exists(db_file):
@@ -375,6 +391,7 @@ def check_url(url):
 def main():
     parser = argparse.ArgumentParser(description="Argus-WP - Herramienta de auditoría para WordPress (TFG ASIR)")
     parser.add_argument("url", help="URL objetivo (ej. aclass.es o https://ejemplo.com)")
+    parser.add_argument("-A", "--all", action="store_true", help="[ACTIVO] Ejecutar TODOS los módulos activos simultáneamente")
     parser.add_argument("-b", "--brute", action="store_true", help="[ACTIVO] Activar módulo de fuerza bruta multihilo")
     parser.add_argument("--xmlrpc", action="store_true", help="[ACTIVO] Comprobar si xmlrpc.php está expuesto")
     parser.add_argument("--fuzz", action="store_true", help="[ACTIVO] Realizar Fuzzing en busca de archivos sensibles y backups")
@@ -386,12 +403,12 @@ def main():
     raw_url = args.url.rstrip('/') 
     
     banner = f"""{Fore.MAGENTA}
-    ___                                     _       _____ 
-   /   |  _________ ___  _______           | |     / /   |
-  / /| | / ___/ __ `/ / / / ___/  ______   | | /| / / /| |
- / ___ |/ /  / /_/ / /_/ (__  )  /_____/   | |/ |/ / ___ |
-/_/  |_/_/   \\__, /\\__,_/_____/            |__/|__/_/  |_|
-            /____/                                        
+    ___                                     _       __ ___ 
+   /   |  _________ ___  _______           | |     / // __ \\
+  / /| | / ___/ __ `/ / / / ___/  ______   | | /| / // /_/ /
+ / ___ |/ /  / /_/ / /_/ (__  )  /_____/   | |/ |/ // ____/ 
+/_/  |_/_/   \\__, /\\__,_/_____/            |__/|__//_/     
+            /____/                                         
 {Fore.CYAN}       WordPress Audit Tool | By: httpbnry / jdb
 {Style.RESET_ALL}"""
     print(banner)
@@ -429,13 +446,13 @@ def main():
     report_data['users'] = users
     
     # Módulos Activos Opcionales
-    if args.xmlrpc:
+    if args.xmlrpc or args.all:
         report_data['xmlrpc_enabled'] = check_xmlrpc(target_url)
         
-    if args.fuzz:
+    if args.fuzz or args.all:
         report_data['sensitive_files'] = fuzz_backups(target_url)
     
-    if args.brute:
+    if args.brute or args.all:
         creds = brute_force_login(target_url, users)
         report_data['brute_force_success'] = creds
         

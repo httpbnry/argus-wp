@@ -55,6 +55,11 @@
 ### Escaneo con Todos los Módulos Activos (RUIDOSO)
 ⚠️ **Advertencia:** Los módulos activos enviarán decenas de peticiones anómalas. Uso exclusivo para entornos con autorización.
 ```bash
+./argus-wp.py ejemplo.com -A
+```
+
+O si prefieres ejecutarlos uno a uno:
+```bash
 ./argus-wp.py ejemplo.com --xmlrpc --fuzz -b
 ```
 
