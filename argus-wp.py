@@ -47,8 +47,8 @@ def check_wordpress(url):
             print_error("No se han encontrado evidencias de WordPress.")
             return False, None, waf
     except Exception as e:
-        print_error(f"Error de conexión: {e}")
-        sys.exit(1)
+        print_error(f"Error de conexión con {url}: {e}")
+        return False, None, None
 
 def detect_waf(headers, cookies):
     waf_name = None
@@ -374,6 +374,11 @@ def export_report(data, filename, fmt):
     except Exception as e:
         print_error(f"Error al exportar el reporte: {e}")
 
+def print_section(title):
+    print(f"\n{Fore.BLUE}{'='*60}{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{Style.BRIGHT}  {title}{Style.RESET_ALL}")
+    print(f"{Fore.BLUE}{'='*60}{Style.RESET_ALL}")
+
 def check_url(url):
     """Verifica si la URL tiene http/https, intenta https primero, si falla intenta http."""
     if not url.startswith('http://') and not url.startswith('https://'):
@@ -388,32 +393,9 @@ def check_url(url):
             return target
     return url
 
-def main():
-    parser = argparse.ArgumentParser(description="Argus-WP - Herramienta de auditoría para WordPress (TFG ASIR)")
-    parser.add_argument("url", help="URL objetivo (ej. aclass.es o https://ejemplo.com)")
-    parser.add_argument("-A", "--all", action="store_true", help="[ACTIVO] Ejecutar TODOS los módulos activos simultáneamente")
-    parser.add_argument("-b", "--brute", action="store_true", help="[ACTIVO] Activar módulo de fuerza bruta multihilo")
-    parser.add_argument("--xmlrpc", action="store_true", help="[ACTIVO] Comprobar si xmlrpc.php está expuesto")
-    parser.add_argument("--fuzz", action="store_true", help="[ACTIVO] Realizar Fuzzing en busca de archivos sensibles y backups")
-    parser.add_argument("--update-db", action="store_true", help="Fuerza la descarga/actualización de la base de datos de Wordfence (vía GitHub Mirror)")
-    parser.add_argument("-o", "--output", help="Guardar el reporte de la auditoría en un archivo")
-    parser.add_argument("-f", "--format", choices=['json', 'txt'], default='json', help="Formato del reporte (json o txt)")
-    args = parser.parse_args()
-    
-    raw_url = args.url.rstrip('/') 
-    
-    banner = f"""{Fore.MAGENTA}
-    ___                                     _       __ ___ 
-   /   |  _________ ___  _______           | |     / // __ \\
-  / /| | / ___/ __ `/ / / / ___/  ______   | | /| / // /_/ /
- / ___ |/ /  / /_/ / /_/ (__  )  /_____/   | |/ |/ // ____/ 
-/_/  |_/_/   \\__, /\\__,_/_____/            |__/|__//_/     
-            /____/                                         
-{Fore.CYAN}       WordPress Audit Tool | By: httpbnry / jdb
-{Style.RESET_ALL}"""
-    print(banner)
-    
+def run_audit(raw_url, args):
     target_url = check_url(raw_url)
+    print_section(f"RECONOCIMIENTO INICIAL: {target_url}")
     
     # Inicializar el reporte
     report_data = {
@@ -429,38 +411,97 @@ def main():
     }
     
     is_wp, html_content, waf_detected = check_wordpress(target_url)
-    if not is_wp: sys.exit(0)
+    if not is_wp: 
+        print_error(f"Omitiendo {target_url} ya que no parece ser WordPress válido o hubo un error de conexión.")
+        return
     report_data['waf'] = waf_detected
         
+    print_section("ENUMERACIÓN DE PLUGINS Y TEMAS")
     plugins, theme = enumerate_plugins_themes(html_content)
     report_data['plugins'] = plugins
     report_data['theme'] = theme
     
     # Análisis de vulnerabilidades local (Wordfence)
+    print_section("ANÁLISIS DE VULNERABILIDADES")
     update_wordfence_db(force_update=args.update_db)
     vulns = check_vulnerabilities_local(plugins)
     report_data['vulnerabilities'] = vulns
     
     # Enumeración de usuarios
+    print_section("ENUMERACIÓN DE USUARIOS")
     users = enumerate_users(target_url)
     report_data['users'] = users
     
     # Módulos Activos Opcionales
     if args.xmlrpc or args.all:
+        print_section("ANÁLISIS XML-RPC")
         report_data['xmlrpc_enabled'] = check_xmlrpc(target_url)
         
     if args.fuzz or args.all:
+        print_section("BÚSQUEDA DE ARCHIVOS SENSIBLES (FUZZING)")
         report_data['sensitive_files'] = fuzz_backups(target_url)
     
     if args.brute or args.all:
+        print_section("ATAQUE DE FUERZA BRUTA")
         creds = brute_force_login(target_url, users)
         report_data['brute_force_success'] = creds
         
     # Exportar reporte si se solicita
     if args.output:
-        export_report(report_data, args.output, args.format)
+        filename = args.output
+        if args.list:
+            base, ext = os.path.splitext(args.output)
+            safe_domain = target_url.replace("https://", "").replace("http://", "").replace("/", "_")
+            filename = f"{base}_{safe_domain}{ext}"
+        export_report(report_data, filename, args.format)
     
-    print(f"\n{Fore.MAGENTA}=== Auditoría Finalizada ==={Style.RESET_ALL}\n")
+    print(f"\n{Fore.GREEN}[✓] Auditoría finalizada para: {target_url}{Style.RESET_ALL}\n")
+
+def main():
+    parser = argparse.ArgumentParser(description="Argus-WP - Herramienta de auditoría para WordPress (TFG ASIR)")
+    parser.add_argument("url", nargs="?", help="URL objetivo (ej. aclass.es o https://ejemplo.com)")
+    parser.add_argument("-l", "--list", help="Archivo de texto con una lista de dominios a escanear (uno por línea)")
+    parser.add_argument("-A", "--all", action="store_true", help="[ACTIVO] Ejecutar TODOS los módulos activos simultáneamente")
+    parser.add_argument("-b", "--brute", action="store_true", help="[ACTIVO] Activar módulo de fuerza bruta multihilo")
+    parser.add_argument("--xmlrpc", action="store_true", help="[ACTIVO] Comprobar si xmlrpc.php está expuesto")
+    parser.add_argument("--fuzz", action="store_true", help="[ACTIVO] Realizar Fuzzing en busca de archivos sensibles y backups")
+    parser.add_argument("--update-db", action="store_true", help="Fuerza la descarga/actualización de la base de datos de Wordfence (vía GitHub Mirror)")
+    parser.add_argument("-o", "--output", help="Guardar el reporte de la auditoría en un archivo")
+    parser.add_argument("-f", "--format", choices=['json', 'txt'], default='json', help="Formato del reporte (json o txt)")
+    args = parser.parse_args()
+    
+    if not args.url and not args.list:
+        parser.error("Debes especificar una URL objetivo o usar -l/--list para un archivo de dominios.")
+    
+    banner = f"""{Fore.MAGENTA}
+    ___                                     _       __ ___ 
+   /   |  _________ ___  _______           | |     / // __ \\
+  / /| | / ___/ __ `/ / / / ___/  ______   | | /| / // /_/ /
+ / ___ |/ /  / /_/ / /_/ (__  )  /_____/   | |/ |/ // ____/ 
+/_/  |_/_/   \\__, /\\__,_/_____/            |__/|__//_/     
+            /____/                                         
+{Fore.CYAN}       WordPress Audit Tool | By: httpbnry / jdb
+{Style.RESET_ALL}"""
+    print(banner)
+    
+    targets = []
+    if args.list:
+        if not os.path.isfile(args.list):
+            print_error(f"El archivo {args.list} no existe.")
+            sys.exit(1)
+        with open(args.list, 'r', encoding='utf-8') as f:
+            targets = [line.strip().rstrip('/') for line in f if line.strip()]
+    elif args.url:
+        targets = [args.url.rstrip('/')]
+        
+    for i, target in enumerate(targets):
+        if i > 0:
+            print(f"\n{Fore.YELLOW}{'*'*60}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}  PASANDO AL SIGUIENTE OBJETIVO...{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}{'*'*60}{Style.RESET_ALL}\n")
+        run_audit(target, args)
+    
+    print(f"\n{Fore.MAGENTA}=== Ejecución Global Finalizada ==={Style.RESET_ALL}\n")
 
 if __name__ == "__main__":
     main()
