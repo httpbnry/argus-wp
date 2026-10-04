@@ -40,12 +40,16 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # Añadimos la extensión .gz porque el archivo ya está comprimido
+      
           git add db/vulndb.json.gz
-          # Comprueba si hay cambios antes de hacer el commit
+      
           if git diff --staged --quiet; then
             echo "No hay vulnerabilidades nuevas. Nada que actualizar."
           else
             git commit -m "chore: actualizacion automatica de base de datos comprimida"
-            git push
+      
+            echo "Sincronizando con main antes de subir..."
+            git pull --rebase origin main
+      
+            git push origin main
           fi
