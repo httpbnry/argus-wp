@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Descargar el repositorio
-        uses: actions/checkout@v4 # ACTUALIZADO A V4 PARA QUITAR EL WARNING
+        uses: uses: actions/checkout@v5 # ACTUALIZADO A V5 PARA QUITAR EL WARNING
 
       - name: Obtener DB desde Wordfence y Comprimir
         env:
